@@ -1,0 +1,75 @@
+# 📚 Book View
+
+A personal PDF book reader you can host anywhere and use from your phone.
+Upload PDF books, read them in a clean mobile-friendly book view, and it
+remembers exactly which page you were on — per book.
+
+## Features
+
+- **Upload PDFs** from any device (multiple at once, 100 MB/file default limit)
+- **Library view** with cover thumbnails and reading-progress bars
+- **Reader** built on Mozilla's pdf.js:
+  - swipe left/right or tap the screen edges to turn pages
+  - tap the center to hide/show the controls
+  - page slider to scrub through the book, zoom in/out with panning
+  - keyboard arrows / space on desktop
+- **Progress auto-saves** as you read and each book reopens where you left off
+- Installable as a home-screen app on iOS/Android (PWA manifest included)
+
+## Running locally
+
+```bash
+npm install
+npm start
+# open http://localhost:3000
+```
+
+To read from your phone on the same Wi-Fi, open `http://<your-computer-ip>:3000`.
+
+## Deploying
+
+The app is a single Node process. Books and the SQLite database live under
+`DATA_DIR` (defaults to `./data`), so the only hosting requirement is a
+**persistent disk/volume** mounted there.
+
+### Docker (works on Fly.io, Railway, Render, a VPS, etc.)
+
+```bash
+docker build -t book-view .
+docker run -p 3000:3000 -v bookview-data:/data book-view
+```
+
+- **Railway**: create a project from this repo, add a Volume mounted at `/data`,
+  set `DATA_DIR=/data`. Done.
+- **Fly.io**: `fly launch`, then `fly volumes create bookview_data` and mount it
+  at `/data` in `fly.toml` with `DATA_DIR=/data`.
+- **Render**: create a Web Service from the Dockerfile and attach a Persistent
+  Disk at `/data` (disks require a paid instance; the free tier is ephemeral).
+
+### Configuration
+
+| Env var         | Default  | Meaning                          |
+| --------------- | -------- | -------------------------------- |
+| `PORT`          | `3000`   | HTTP port                        |
+| `DATA_DIR`      | `./data` | Where PDFs + the SQLite DB live  |
+| `MAX_UPLOAD_MB` | `100`    | Per-file upload size limit       |
+
+> **Note:** there is no authentication yet — anyone with the URL can see and
+> upload books. Keep the URL private, put it behind basic auth on a reverse
+> proxy, or wait for the accounts feature. Accounts, per-user libraries, and
+> storage limits are the planned next step.
+
+## Architecture
+
+```
+server.js        Express API + static hosting
+  /api/books     CRUD, upload (multer), progress tracking
+  SQLite (better-sqlite3) for metadata; PDFs stored on disk
+public/
+  index.html     library + reader shells
+  app.js         pdf.js rendering, swipe/zoom, hash routing
+  styles.css     mobile-first dark UI
+```
+
+Cover thumbnails are rendered client-side (pdf.js) right after upload and
+stored server-side as PNGs, so the library view never downloads full PDFs.
