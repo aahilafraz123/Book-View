@@ -19,9 +19,22 @@ remembers exactly which page you were on — per book.
   and an "all notes" list lets you jump straight to any annotated page
 - **Text highlighting**: select any text in a book (long-press on mobile) and
   a floating toolbar offers four highlighter colors plus copy. Tap an existing
-  highlight to recolor or remove it. Highlights live in the combined
-  notes-&-highlights list alongside your notes, quoted and color-chipped, and
-  tapping one jumps to its page
+  highlight to recolor, remove, or **attach a note to the passage** (marginalia
+  with auto-save; annotated highlights get a notch). Highlights live in the
+  combined notes-&-highlights list alongside your notes, quoted and
+  color-chipped, and tapping one jumps to its page
+- **Three view modes** per book (Aa sheet): classic **Paged**, virtualized
+  **Continuous scroll**, and **Reflow** — the page's text re-typeset as
+  flowing, resizable serif text (EPUB-feel for text PDFs)
+- **Night reading**: Light / Sepia / Dark page themes
+- **In-book & library-wide search** backed by a server-side FTS5 index of
+  extracted text, with snippet results and match flashes on jump
+- **Chapter navigation** from the PDF's embedded outline, when present
+- **Thumbnail filmstrip** while scrubbing the page slider
+- **Bookmarks** (🔖) alongside notes and highlights
+- **Markdown export** of all notes, highlights, and bookmarks per book
+- **Reading stats**: daily streak, minutes-per-day chart, totals — stitched
+  server-side from progress pings (see `docs/specs/` for design docs)
 - Installable as a home-screen app on iOS/Android (PWA manifest included)
 
 ## Running locally

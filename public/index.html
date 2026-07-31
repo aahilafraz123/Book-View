@@ -25,10 +25,13 @@
         <h1>Book View</h1>
         <p class="tagline">your quiet little library</p>
       </div>
-      <label class="btn btn-primary upload-btn">
-        <input type="file" id="file-input" accept="application/pdf,.pdf" multiple hidden />
-        <span class="plus">+</span> Add books
-      </label>
+      <div class="header-actions">
+        <button id="stats-btn" class="icon-btn" aria-label="Reading stats">📊</button>
+        <label class="btn btn-primary upload-btn">
+          <input type="file" id="file-input" accept="application/pdf,.pdf" multiple hidden />
+          <span class="plus">+</span> Add books
+        </label>
+      </div>
     </header>
 
     <div id="upload-status" class="upload-status" hidden>
@@ -52,7 +55,9 @@
     <header id="reader-topbar" class="reader-bar reader-topbar">
       <button id="back-btn" class="icon-btn" aria-label="Back to library">←</button>
       <span id="reader-title" class="reader-title"></span>
-      <span id="reader-pageinfo" class="reader-pageinfo"></span>
+      <button id="reader-pageinfo" class="reader-pageinfo" aria-label="Toggle page thumbnails"></button>
+      <button id="search-btn" class="icon-btn" aria-label="Search in book">⌕</button>
+      <button id="bookmark-btn" class="icon-btn bookmark-btn" aria-label="Bookmark this page">🔖</button>
       <button id="note-btn" class="icon-btn note-btn" aria-label="Note for this page">✎</button>
     </header>
 
@@ -66,17 +71,21 @@
         <div id="highlight-layer" class="highlight-layer"></div>
         <div id="text-layer" class="textLayer"></div>
       </div>
+      <div id="scroll-stack" class="scroll-stack" hidden></div>
+      <div id="reflow-view" class="reflow-view" hidden></div>
     </div>
 
+    <div id="thumb-strip" class="thumb-strip" hidden></div>
+
     <footer id="reader-bottombar" class="reader-bar reader-bottombar">
-      <button id="zoom-out-btn" class="icon-btn" aria-label="Zoom out">−</button>
+      <button id="display-btn" class="icon-btn display-btn" aria-label="Display settings">Aa</button>
       <button id="prev-btn" class="icon-btn" aria-label="Previous page">‹</button>
       <div class="slider-wrap">
         <div id="slider-bubble" class="slider-bubble" hidden></div>
         <input type="range" id="page-slider" min="1" max="1" value="1" />
       </div>
       <button id="next-btn" class="icon-btn" aria-label="Next page">›</button>
-      <button id="zoom-in-btn" class="icon-btn" aria-label="Zoom in">+</button>
+      <button id="contents-btn" class="icon-btn" aria-label="Table of contents" hidden>☰</button>
     </footer>
   </main>
 
@@ -86,6 +95,7 @@
     <button class="hl-dot" data-color="green" aria-label="Highlight green"></button>
     <button class="hl-dot" data-color="blue" aria-label="Highlight blue"></button>
     <button class="hl-dot" data-color="pink" aria-label="Highlight pink"></button>
+    <button id="hl-note-btn" class="hl-action" aria-label="Attach note">Note</button>
     <button id="hl-copy" class="hl-action" aria-label="Copy text">Copy</button>
     <button id="hl-delete" class="hl-action danger" aria-label="Remove highlight" hidden>Remove</button>
   </div>
@@ -115,6 +125,73 @@
     <div class="sheet-handle"></div>
     <p id="notes-list-title" class="sheet-message"></p>
     <div id="notes-list" class="notes-list"></div>
+  </div>
+
+  <!-- Display settings sheet -->
+  <div id="display-sheet" class="confirm-sheet note-sheet" hidden>
+    <div class="sheet-handle"></div>
+    <p class="sheet-message">Display</p>
+    <div class="seg-row" id="seg-view" role="group" aria-label="View mode">
+      <button data-mode="paged">Paged</button>
+      <button data-mode="scroll">Scroll</button>
+      <button data-mode="reflow">Reflow</button>
+    </div>
+    <div class="seg-row" id="seg-theme" role="group" aria-label="Page theme">
+      <button data-theme="light">Light</button>
+      <button data-theme="sepia">Sepia</button>
+      <button data-theme="dark">Dark</button>
+    </div>
+    <div class="display-row" id="row-fontsize" hidden>
+      <label for="font-size-slider">Text size</label>
+      <input type="range" id="font-size-slider" min="14" max="24" step="1" />
+    </div>
+    <div class="display-row" id="row-zoom">
+      <label>Zoom</label>
+      <div class="zoom-controls">
+        <button id="zoom-out-btn" class="icon-btn" aria-label="Zoom out">−</button>
+        <span id="zoom-label">100%</span>
+        <button id="zoom-in-btn" class="icon-btn" aria-label="Zoom in">+</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Search sheet -->
+  <div id="search-sheet" class="confirm-sheet note-sheet" hidden>
+    <div class="sheet-handle"></div>
+    <div class="search-row">
+      <input type="search" id="search-input" placeholder="Search this book…" autocomplete="off" />
+      <button id="search-go" class="btn btn-primary">Find</button>
+    </div>
+    <div id="search-results" class="notes-list"></div>
+  </div>
+
+  <!-- Contents (outline) sheet -->
+  <div id="contents-sheet" class="confirm-sheet note-sheet" hidden>
+    <div class="sheet-handle"></div>
+    <p class="sheet-message">Contents</p>
+    <div id="contents-list" class="notes-list"></div>
+  </div>
+
+  <!-- Highlight note sheet -->
+  <div id="hl-note-sheet" class="confirm-sheet note-sheet" hidden>
+    <div class="sheet-handle"></div>
+    <div class="note-head">
+      <span id="hl-note-title" class="note-title"></span>
+      <span id="hl-note-status" class="note-status"></span>
+    </div>
+    <textarea
+      id="hl-note-text"
+      class="note-text"
+      placeholder="Why did this passage matter?"
+      maxlength="5000"
+    ></textarea>
+  </div>
+
+  <!-- Reading stats sheet -->
+  <div id="stats-sheet" class="confirm-sheet note-sheet" hidden>
+    <div class="sheet-handle"></div>
+    <p class="sheet-message">Reading stats</p>
+    <div id="stats-body" class="stats-body"></div>
   </div>
 
   <!-- Delete confirm sheet -->
