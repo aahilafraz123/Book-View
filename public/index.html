@@ -3,29 +3,47 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#12100e" />
+  <meta name="theme-color" content="#0f0d0b" />
   <title>Book View</title>
   <link rel="manifest" href="/manifest.json" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="/icon-192.png" />
+  <link rel="stylesheet" href="/fonts/fonts.css" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
+  <div class="ambient" aria-hidden="true">
+    <div class="glow glow-a"></div>
+    <div class="glow glow-b"></div>
+    <div class="grain"></div>
+  </div>
+
   <!-- Library -->
   <main id="library-view" class="view">
     <header class="library-header">
-      <h1>📚 Book View</h1>
+      <div class="brand">
+        <h1>Book View</h1>
+        <p class="tagline">your quiet little library</p>
+      </div>
       <label class="btn btn-primary upload-btn">
         <input type="file" id="file-input" accept="application/pdf,.pdf" multiple hidden />
-        + Add books
+        <span class="plus">+</span> Add books
       </label>
     </header>
-    <div id="upload-status" class="upload-status" hidden></div>
+
+    <div id="upload-status" class="upload-status" hidden>
+      <div class="upload-spinner"></div>
+      <span id="upload-status-text"></span>
+      <div class="upload-shimmer"></div>
+    </div>
+
     <div id="book-grid" class="book-grid"></div>
+
     <div id="empty-state" class="empty-state" hidden>
+      <div class="empty-glow"></div>
       <div class="empty-icon">📖</div>
-      <p>Your library is empty.</p>
-      <p class="muted">Tap <strong>+ Add books</strong> to upload a PDF.</p>
+      <p class="empty-title">Nothing on the shelf yet</p>
+      <p class="muted">Tap <strong>+ Add books</strong> to bring in a PDF.</p>
     </div>
   </main>
 
@@ -38,18 +56,38 @@
     </header>
 
     <div id="page-container" class="page-container">
-      <div id="reader-loading" class="reader-loading">Loading…</div>
-      <canvas id="page-canvas"></canvas>
+      <div id="reader-loading" class="reader-loading">
+        <div class="loader-book"><span></span><span></span><span></span></div>
+        <p>Opening book…</p>
+      </div>
+      <div id="page-wrap" class="page-wrap">
+        <canvas id="page-canvas"></canvas>
+      </div>
     </div>
 
     <footer id="reader-bottombar" class="reader-bar reader-bottombar">
       <button id="zoom-out-btn" class="icon-btn" aria-label="Zoom out">−</button>
       <button id="prev-btn" class="icon-btn" aria-label="Previous page">‹</button>
-      <input type="range" id="page-slider" min="1" max="1" value="1" />
+      <div class="slider-wrap">
+        <div id="slider-bubble" class="slider-bubble" hidden></div>
+        <input type="range" id="page-slider" min="1" max="1" value="1" />
+      </div>
       <button id="next-btn" class="icon-btn" aria-label="Next page">›</button>
       <button id="zoom-in-btn" class="icon-btn" aria-label="Zoom in">+</button>
     </footer>
   </main>
+
+  <!-- Toasts -->
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <!-- Delete confirm sheet -->
+  <div id="sheet-backdrop" class="sheet-backdrop" hidden></div>
+  <div id="confirm-sheet" class="confirm-sheet" hidden>
+    <div class="sheet-handle"></div>
+    <p id="sheet-message" class="sheet-message"></p>
+    <button id="sheet-confirm" class="btn btn-danger">Delete book</button>
+    <button id="sheet-cancel" class="btn btn-ghost">Keep it</button>
+  </div>
 
   <script type="module" src="/app.js"></script>
 </body>

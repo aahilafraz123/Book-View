@@ -10,12 +10,17 @@ const bookGrid = $('book-grid');
 const emptyState = $('empty-state');
 const fileInput = $('file-input');
 const uploadStatus = $('upload-status');
+const uploadStatusText = $('upload-status-text');
 
 const pageContainer = $('page-container');
+const pageWrap = $('page-wrap');
 const canvas = $('page-canvas');
 const ctx = canvas.getContext('2d');
 const readerLoading = $('reader-loading');
 const pageSlider = $('page-slider');
+const sliderBubble = $('slider-bubble');
+
+const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 const reader = {
   book: null,
@@ -24,6 +29,7 @@ const reader = {
   zoom: 1,
   rendering: false,
   pendingPage: null,
+  pendingDir: 0,
   loadToken: 0,
 };
 
@@ -36,6 +42,58 @@ async function api(path, options = {}) {
   return body;
 }
 
+/* ---------------- Toasts ---------------- */
+
+function toast(message, { error = false, duration = 2800 } = {}) {
+  const el = document.createElement('div');
+  el.className = `toast${error ? ' error' : ''}`;
+  el.textContent = message;
+  $('toast-container').appendChild(el);
+  setTimeout(() => {
+    el.classList.add('leaving');
+    el.addEventListener('animationend', () => el.remove(), { once: true });
+  }, duration);
+}
+
+/* ---------------- Confirm sheet ---------------- */
+
+function confirmSheet(message) {
+  return new Promise((resolve) => {
+    const backdrop = $('sheet-backdrop');
+    const sheet = $('confirm-sheet');
+    $('sheet-message').textContent = message;
+    backdrop.hidden = false;
+    sheet.hidden = false;
+    backdrop.classList.remove('leaving');
+    sheet.classList.remove('leaving');
+
+    const close = (answer) => {
+      sheet.classList.add('leaving');
+      backdrop.classList.add('leaving');
+      sheet.addEventListener(
+        'animationend',
+        () => {
+          sheet.hidden = true;
+          backdrop.hidden = true;
+        },
+        { once: true }
+      );
+      cleanup();
+      resolve(answer);
+    };
+    const onConfirm = () => close(true);
+    const onCancel = () => close(false);
+    const cleanup = () => {
+      $('sheet-confirm').removeEventListener('click', onConfirm);
+      $('sheet-cancel').removeEventListener('click', onCancel);
+      backdrop.removeEventListener('click', onCancel);
+    };
+    $('sheet-confirm').addEventListener('click', onConfirm);
+    $('sheet-cancel').addEventListener('click', onCancel);
+    backdrop.addEventListener('click', onCancel);
+  });
+}
+
 /* ---------------- Library ---------------- */
 
 async function loadLibrary() {
@@ -43,16 +101,20 @@ async function loadLibrary() {
   bookGrid.innerHTML = '';
   emptyState.hidden = books.length > 0;
 
-  for (const book of books) {
-    bookGrid.appendChild(renderCard(book));
-  }
+  books.forEach((book, i) => {
+    bookGrid.appendChild(renderCard(book, i));
+  });
 }
 
-function renderCard(book) {
+function renderCard(book, index) {
   const card = document.createElement('div');
   card.className = 'book-card';
+  card.style.setProperty('--i', Math.min(index, 10));
 
-  const pct = Math.round((book.currentPage / book.pageCount) * 100);
+  const pct = book.lastReadAt
+    ? Math.round((book.currentPage / book.pageCount) * 100)
+    : 0;
+
   const cover = document.createElement('div');
   cover.className = 'book-cover';
   if (book.hasCover) {
@@ -67,10 +129,19 @@ function renderCard(book) {
     ph.textContent = book.title;
     cover.appendChild(ph);
   }
+
+  const shine = document.createElement('div');
+  shine.className = 'cover-shine';
+  cover.appendChild(shine);
+
   const track = document.createElement('div');
   track.className = 'progress-track';
-  track.innerHTML = `<div class="progress-fill" style="width:${pct}%"></div>`;
+  const fill = document.createElement('div');
+  fill.className = 'progress-fill';
+  track.appendChild(fill);
   cover.appendChild(track);
+  // set after insertion so the width animates up from zero
+  requestAnimationFrame(() => requestAnimationFrame(() => (fill.style.width = `${pct}%`)));
 
   const meta = document.createElement('div');
   meta.className = 'book-meta';
@@ -89,8 +160,16 @@ function renderCard(book) {
   del.setAttribute('aria-label', `Delete ${book.title}`);
   del.addEventListener('click', async (e) => {
     e.stopPropagation();
-    if (!confirm(`Delete "${book.title}"?`)) return;
-    await api(`/api/books/${book.id}`, { method: 'DELETE' });
+    const yes = await confirmSheet(`Remove “${book.title}” from your library?`);
+    if (!yes) return;
+    card.classList.add('removing');
+    await new Promise((r) => setTimeout(r, REDUCED_MOTION ? 0 : 320));
+    try {
+      await api(`/api/books/${book.id}`, { method: 'DELETE' });
+      toast(`Deleted “${book.title}”`);
+    } catch (err) {
+      toast(err.message, { error: true });
+    }
     loadLibrary();
   });
   sub.appendChild(del);
@@ -113,7 +192,10 @@ fileInput.addEventListener('change', async () => {
   uploadStatus.hidden = false;
   let done = 0;
   for (const file of files) {
-    uploadStatus.textContent = `Uploading ${file.name} (${done + 1}/${files.length})…`;
+    uploadStatusText.textContent =
+      files.length > 1
+        ? `Adding ${file.name} (${done + 1} of ${files.length})…`
+        : `Adding ${file.name}…`;
     try {
       const form = new FormData();
       form.append('file', file);
@@ -121,10 +203,11 @@ fileInput.addEventListener('change', async () => {
       await generateCover(file, book.id).catch(() => {});
       done++;
     } catch (err) {
-      alert(`${file.name}: ${err.message}`);
+      toast(`${file.name}: ${err.message}`, { error: true, duration: 4000 });
     }
   }
   uploadStatus.hidden = true;
+  if (done > 0) toast(done > 1 ? `${done} books shelved ✦` : 'Book shelved ✦');
   loadLibrary();
 });
 
@@ -185,7 +268,8 @@ async function openReader(bookId) {
     await renderPage(reader.page);
   } catch (err) {
     if (token !== reader.loadToken) return;
-    readerLoading.textContent = err.message;
+    readerLoading.hidden = false;
+    readerLoading.querySelector('p').textContent = err.message;
   }
 }
 
@@ -197,63 +281,106 @@ function closeReader() {
   reader.book = null;
   reader.rendering = false;
   reader.pendingPage = null;
+  reader.pendingDir = 0;
   canvas.width = 0;
   canvas.height = 0;
+  canvas.style.width = '';
+  canvas.style.height = '';
   $('reader-pageinfo').textContent = '';
   readerView.hidden = true;
   libraryView.hidden = false;
-  readerLoading.textContent = 'Loading…';
+  readerLoading.querySelector('p').textContent = 'Opening book…';
   loadLibrary();
 }
 
-async function renderPage(num) {
+async function renderPage(num, dir = 0) {
   if (!reader.pdf) return;
   if (reader.rendering) {
     reader.pendingPage = num;
+    reader.pendingDir = dir;
     return;
   }
   reader.rendering = true;
   reader.page = num;
 
-  const page = await reader.pdf.getPage(num);
-  const base = page.getViewport({ scale: 1 });
-  const fitScale = pageContainer.clientWidth / base.width;
-  const scale = fitScale * reader.zoom;
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const viewport = page.getViewport({ scale });
+  // Snapshot the outgoing page so we can flip it away over the incoming one.
+  let snap = null;
+  if (dir !== 0 && canvas.width > 0 && !REDUCED_MOTION) {
+    snap = document.createElement('canvas');
+    snap.width = canvas.width;
+    snap.height = canvas.height;
+    snap.getContext('2d').drawImage(canvas, 0, 0);
+    snap.className = 'page-snapshot';
+    snap.style.width = canvas.style.width;
+    snap.style.height = canvas.style.height;
+  }
 
-  canvas.width = Math.round(viewport.width * dpr);
-  canvas.height = Math.round(viewport.height * dpr);
-  canvas.style.width = `${Math.round(viewport.width)}px`;
-  canvas.style.height = `${Math.round(viewport.height)}px`;
+  try {
+    const page = await reader.pdf.getPage(num);
+    const base = page.getViewport({ scale: 1 });
+    const fitScale = pageContainer.clientWidth / base.width;
+    const scale = fitScale * reader.zoom;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const viewport = page.getViewport({ scale });
 
-  await page.render({
-    canvasContext: ctx,
-    viewport,
-    transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null,
-  }).promise;
+    canvas.width = Math.round(viewport.width * dpr);
+    canvas.height = Math.round(viewport.height * dpr);
+    canvas.style.width = `${Math.round(viewport.width)}px`;
+    canvas.style.height = `${Math.round(viewport.height)}px`;
+
+    await page.render({
+      canvasContext: ctx,
+      viewport,
+      transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null,
+    }).promise;
+  } catch (err) {
+    reader.rendering = false;
+    throw err;
+  }
+
+  if (snap) {
+    pageWrap.appendChild(snap);
+    canvas.classList.remove('page-enter-next', 'page-enter-prev');
+    void canvas.offsetWidth; // restart the entrance animation
+    canvas.classList.add(dir > 0 ? 'page-enter-next' : 'page-enter-prev');
+    requestAnimationFrame(() =>
+      snap.classList.add(dir > 0 ? 'flip-out-next' : 'flip-out-prev')
+    );
+    setTimeout(() => snap.remove(), 500);
+  }
 
   reader.rendering = false;
   updatePageUI();
 
   if (reader.pendingPage !== null) {
     const next = reader.pendingPage;
+    const nextDir = reader.pendingDir;
     reader.pendingPage = null;
-    renderPage(next);
+    reader.pendingDir = 0;
+    renderPage(next, nextDir);
   }
 }
 
 function updatePageUI() {
   $('reader-pageinfo').textContent = `${reader.page} / ${reader.book.pageCount}`;
   pageSlider.value = reader.page;
+  updateSliderFill();
+}
+
+function updateSliderFill() {
+  const max = parseInt(pageSlider.max, 10) || 1;
+  const val = parseInt(pageSlider.value, 10) || 1;
+  const pct = max > 1 ? ((val - 1) / (max - 1)) * 100 : 100;
+  pageSlider.style.setProperty('--fill', `${pct}%`);
 }
 
 function goToPage(num, { instantSave = false } = {}) {
   if (!reader.book) return;
   const clamped = Math.min(Math.max(num, 1), reader.book.pageCount);
   if (clamped === reader.page && !reader.rendering) return;
+  const dir = clamped > reader.page ? 1 : -1;
   pageContainer.scrollTop = 0;
-  renderPage(clamped);
+  renderPage(clamped, dir);
   saveProgress(instantSave);
 }
 
@@ -291,10 +418,28 @@ $('zoom-out-btn').addEventListener('click', () => {
   renderPage(reader.page);
 });
 
+function positionBubble() {
+  const max = parseInt(pageSlider.max, 10) || 1;
+  const val = parseInt(pageSlider.value, 10) || 1;
+  const pct = max > 1 ? (val - 1) / (max - 1) : 1;
+  const rect = pageSlider.getBoundingClientRect();
+  const thumbHalf = 9;
+  const x = thumbHalf + pct * (rect.width - thumbHalf * 2);
+  sliderBubble.style.left = `${x}px`;
+  sliderBubble.textContent = `p. ${val}`;
+}
+
 pageSlider.addEventListener('input', () => {
   $('reader-pageinfo').textContent = `${pageSlider.value} / ${reader.book?.pageCount ?? '?'}`;
+  updateSliderFill();
+  sliderBubble.hidden = false;
+  positionBubble();
 });
-pageSlider.addEventListener('change', () => goToPage(parseInt(pageSlider.value, 10)));
+pageSlider.addEventListener('change', () => {
+  sliderBubble.hidden = true;
+  goToPage(parseInt(pageSlider.value, 10));
+});
+pageSlider.addEventListener('blur', () => (sliderBubble.hidden = true));
 
 // Tap zones: left/right third turns pages, center toggles the bars.
 pageContainer.addEventListener('click', (e) => {
