@@ -63,6 +63,8 @@
       </div>
       <div id="page-wrap" class="page-wrap">
         <canvas id="page-canvas"></canvas>
+        <div id="highlight-layer" class="highlight-layer"></div>
+        <div id="text-layer" class="textLayer"></div>
       </div>
     </div>
 
@@ -77,6 +79,16 @@
       <button id="zoom-in-btn" class="icon-btn" aria-label="Zoom in">+</button>
     </footer>
   </main>
+
+  <!-- Highlight toolbar (appears over text selections / existing highlights) -->
+  <div id="hl-toolbar" class="hl-toolbar" hidden>
+    <button class="hl-dot" data-color="amber" aria-label="Highlight amber"></button>
+    <button class="hl-dot" data-color="green" aria-label="Highlight green"></button>
+    <button class="hl-dot" data-color="blue" aria-label="Highlight blue"></button>
+    <button class="hl-dot" data-color="pink" aria-label="Highlight pink"></button>
+    <button id="hl-copy" class="hl-action" aria-label="Copy text">Copy</button>
+    <button id="hl-delete" class="hl-action danger" aria-label="Remove highlight" hidden>Remove</button>
+  </div>
 
   <!-- Toasts -->
   <div id="toast-container" class="toast-container" aria-live="polite"></div>
@@ -95,7 +107,7 @@
       placeholder="Jot something down about this page…"
       maxlength="20000"
     ></textarea>
-    <button id="all-notes-btn" class="btn btn-ghost">All notes in this book</button>
+    <button id="all-notes-btn" class="btn btn-ghost">Notes &amp; highlights in this book</button>
   </div>
 
   <!-- All-notes sheet -->

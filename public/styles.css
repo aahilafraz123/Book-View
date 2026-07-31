@@ -583,10 +583,114 @@ html, body {
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.4);
 }
 
+/* Highlight rectangles painted between the canvas and the text layer */
+
+.highlight-layer {
+  position: absolute;
+  top: 0; left: 0;
+  z-index: 1;
+  overflow: hidden;
+}
+
+.hl-rect {
+  position: absolute;
+  mix-blend-mode: multiply;
+  opacity: 0.45;
+  border-radius: 2px;
+  pointer-events: none; /* taps are hit-tested by coordinates in app.js */
+  animation: hl-pop 0.3s var(--ease-spring) both;
+}
+
+@keyframes hl-pop {
+  from { opacity: 0; transform: scaleY(0.4); }
+  to   { opacity: 0.45; transform: none; }
+}
+
+/* pdf.js text layer: invisible selectable text aligned over the canvas */
+
+.textLayer {
+  position: absolute;
+  top: 0; left: 0;
+  overflow: hidden;
+  line-height: 1;
+  z-index: 3;
+  pointer-events: none;
+  transform-origin: 0 0;
+  text-size-adjust: none;
+  -webkit-text-size-adjust: none;
+  forced-color-adjust: none;
+  caret-color: transparent;
+}
+
+.textLayer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0 0;
+  pointer-events: auto;
+}
+
+.textLayer span.markedContent { top: 0; height: 0; }
+
+.textLayer ::selection {
+  background: rgba(224, 164, 88, 0.45);
+  color: transparent;
+}
+
+/* Floating selection / highlight toolbar */
+
+.hl-toolbar {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: rgba(28, 24, 19, 0.96);
+  border: 1px solid var(--stroke);
+  border-radius: 14px;
+  padding: 9px 12px;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  animation: bubble-in 0.22s var(--ease-spring) both;
+}
+
+.hl-dot {
+  width: 23px;
+  height: 23px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.28);
+  cursor: pointer;
+  transition: transform 0.2s var(--ease-spring), border-color 0.2s ease;
+  flex-shrink: 0;
+}
+
+.hl-dot:hover, .hl-dot:active { transform: scale(1.22); border-color: rgba(255, 255, 255, 0.7); }
+
+.hl-dot[data-color="amber"] { background: #f2c14e; }
+.hl-dot[data-color="green"] { background: #8fd07f; }
+.hl-dot[data-color="blue"]  { background: #7fb8e6; }
+.hl-dot[data-color="pink"]  { background: #f0a1c0; }
+
+.hl-action {
+  background: none;
+  border: none;
+  border-left: 1px solid var(--stroke);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 3px 4px 3px 12px;
+  cursor: pointer;
+}
+
+.hl-action.danger { color: var(--danger); }
+
 .page-snapshot {
   position: absolute;
   top: 0; left: 0;
-  z-index: 2;
+  z-index: 4;
   border-radius: 3px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
   transition: transform 0.45s cubic-bezier(0.55, 0, 0.55, 1), opacity 0.28s ease-in;
@@ -883,6 +987,21 @@ body:has(#reader-view:not([hidden])) .toast-container {
   -webkit-box-orient: vertical;
   overflow: hidden;
   white-space: pre-line;
+}
+
+.note-item-content.quote {
+  font-family: var(--serif);
+  font-style: italic;
+  color: #d9d2c7;
+}
+
+.hl-chip {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  margin-right: 7px;
+  vertical-align: baseline;
 }
 
 /* ---------- Reduced motion ---------- */

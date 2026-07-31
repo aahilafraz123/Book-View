@@ -36,7 +36,19 @@ db.exec(`
     updated_at TEXT NOT NULL,
     PRIMARY KEY (book_id, page)
   );
+  CREATE TABLE IF NOT EXISTS highlights (
+    id         TEXT PRIMARY KEY,
+    book_id    TEXT NOT NULL,
+    page       INTEGER NOT NULL,
+    color      TEXT NOT NULL,
+    text       TEXT NOT NULL,
+    rects      TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_highlights_book ON highlights (book_id, page);
 `);
+
+const HIGHLIGHT_COLORS = new Set(['amber', 'green', 'blue', 'pink']);
 
 const app = express();
 app.use(express.json());
@@ -66,13 +78,41 @@ function bookRow(row) {
     addedAt: row.added_at,
     lastReadAt: row.last_read_at,
     noteCount: row.note_count ?? 0,
+    highlightCount: row.highlight_count ?? 0,
   };
+}
+
+function highlightRow(row) {
+  return {
+    id: row.id,
+    page: row.page,
+    color: row.color,
+    text: row.text,
+    rects: JSON.parse(row.rects),
+    createdAt: row.created_at,
+  };
+}
+
+// rects come in as fractions of the page box: [[x, y, w, h], ...] each 0..1
+function sanitizeRects(rects) {
+  if (!Array.isArray(rects)) return null;
+  const clamp = (v) => Math.min(Math.max(Number(v) || 0, 0), 1);
+  const out = [];
+  for (const r of rects.slice(0, 40)) {
+    if (!Array.isArray(r) || r.length !== 4) return null;
+    const [x, y, w, h] = r.map(clamp);
+    if (w <= 0 || h <= 0) continue;
+    out.push([x, y, Math.min(w, 1 - x), Math.min(h, 1 - y)]);
+  }
+  return out.length ? out : null;
 }
 
 app.get('/api/books', (req, res) => {
   const rows = db
     .prepare(
-      `SELECT b.*, (SELECT COUNT(*) FROM notes n WHERE n.book_id = b.id) AS note_count
+      `SELECT b.*,
+         (SELECT COUNT(*) FROM notes n WHERE n.book_id = b.id) AS note_count,
+         (SELECT COUNT(*) FROM highlights h WHERE h.book_id = b.id) AS highlight_count
        FROM books b
        ORDER BY last_read_at IS NULL, last_read_at DESC, added_at DESC`
     )
@@ -176,11 +216,66 @@ app.put('/api/books/:id/notes/:page', (req, res) => {
   res.json({ page, content, updatedAt: now });
 });
 
+app.get('/api/books/:id/highlights', (req, res) => {
+  const row = getBookOr404(req, res);
+  if (!row) return;
+  const rows = db
+    .prepare('SELECT * FROM highlights WHERE book_id = ? ORDER BY page, created_at')
+    .all(row.id);
+  res.json(rows.map(highlightRow));
+});
+
+app.post('/api/books/:id/highlights', (req, res) => {
+  const row = getBookOr404(req, res);
+  if (!row) return;
+  const page = parseInt(req.body.page, 10);
+  if (!Number.isInteger(page) || page < 1 || page > row.page_count) {
+    return res.status(400).json({ error: 'Page out of range' });
+  }
+  const color = HIGHLIGHT_COLORS.has(req.body.color) ? req.body.color : 'amber';
+  const rects = sanitizeRects(req.body.rects);
+  if (!rects) return res.status(400).json({ error: 'Invalid highlight rects' });
+  const text = String(req.body.text ?? '').slice(0, 1000);
+
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO highlights (id, book_id, page, color, text, rects, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(id, row.id, page, color, text, JSON.stringify(rects), now);
+  res.status(201).json(highlightRow(db.prepare('SELECT * FROM highlights WHERE id = ?').get(id)));
+});
+
+app.patch('/api/books/:id/highlights/:hid', (req, res) => {
+  const row = getBookOr404(req, res);
+  if (!row) return;
+  const hl = db
+    .prepare('SELECT * FROM highlights WHERE id = ? AND book_id = ?')
+    .get(req.params.hid, row.id);
+  if (!hl) return res.status(404).json({ error: 'Highlight not found' });
+  if (!HIGHLIGHT_COLORS.has(req.body.color)) {
+    return res.status(400).json({ error: 'Unknown color' });
+  }
+  db.prepare('UPDATE highlights SET color = ? WHERE id = ?').run(req.body.color, hl.id);
+  res.json(highlightRow(db.prepare('SELECT * FROM highlights WHERE id = ?').get(hl.id)));
+});
+
+app.delete('/api/books/:id/highlights/:hid', (req, res) => {
+  const row = getBookOr404(req, res);
+  if (!row) return;
+  const info = db
+    .prepare('DELETE FROM highlights WHERE id = ? AND book_id = ?')
+    .run(req.params.hid, row.id);
+  if (!info.changes) return res.status(404).json({ error: 'Highlight not found' });
+  res.json({ ok: true });
+});
+
 app.delete('/api/books/:id', (req, res) => {
   const row = getBookOr404(req, res);
   if (!row) return;
   db.prepare('DELETE FROM books WHERE id = ?').run(row.id);
   db.prepare('DELETE FROM notes WHERE book_id = ?').run(row.id);
+  db.prepare('DELETE FROM highlights WHERE book_id = ?').run(row.id);
   fs.unlink(path.join(UPLOADS_DIR, row.filename), () => {});
   fs.unlink(path.join(COVERS_DIR, `${row.id}.png`), () => {});
   res.json({ ok: true });

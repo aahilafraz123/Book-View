@@ -17,6 +17,11 @@ remembers exactly which page you were on — per book.
 - **Per-page notes**: tap ✎ (or press `n`) to jot a note on the page you're
   reading — it auto-saves as you type, pages with notes get an amber badge,
   and an "all notes" list lets you jump straight to any annotated page
+- **Text highlighting**: select any text in a book (long-press on mobile) and
+  a floating toolbar offers four highlighter colors plus copy. Tap an existing
+  highlight to recolor or remove it. Highlights live in the combined
+  notes-&-highlights list alongside your notes, quoted and color-chipped, and
+  tapping one jumps to its page
 - Installable as a home-screen app on iOS/Android (PWA manifest included)
 
 ## Running locally

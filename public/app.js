@@ -32,7 +32,13 @@ const reader = {
   pendingDir: 0,
   loadToken: 0,
   notes: new Map(),
+  highlights: new Map(),
 };
+
+const textLayerDiv = $('text-layer');
+const highlightLayer = $('highlight-layer');
+const HL_COLORS = { amber: '#f2c14e', green: '#8fd07f', blue: '#7fb8e6', pink: '#f0a1c0' };
+let textLayerInstance = null;
 
 /* ---------------- API ---------------- */
 
@@ -155,6 +161,7 @@ function renderCard(book, index) {
     ? `p. ${book.currentPage} / ${book.pageCount}`
     : `${book.pageCount} pages`;
   if (book.noteCount > 0) progressLabel += ` · ✎ ${book.noteCount}`;
+  if (book.highlightCount > 0) progressLabel += ` · 🖍 ${book.highlightCount}`;
   const labelSpan = document.createElement('span');
   labelSpan.textContent = progressLabel;
   sub.appendChild(labelSpan);
@@ -262,9 +269,17 @@ async function openReader(bookId) {
     pageSlider.max = book.pageCount;
     pageSlider.value = book.currentPage;
 
-    const notes = await api(`/api/books/${bookId}/notes`).catch(() => []);
+    const [notes, highlights] = await Promise.all([
+      api(`/api/books/${bookId}/notes`).catch(() => []),
+      api(`/api/books/${bookId}/highlights`).catch(() => []),
+    ]);
     if (token !== reader.loadToken) return;
     reader.notes = new Map(notes.map((n) => [n.page, n.content]));
+    reader.highlights = new Map();
+    for (const hl of highlights) {
+      if (!reader.highlights.has(hl.page)) reader.highlights.set(hl.page, []);
+      reader.highlights.get(hl.page).push(hl);
+    }
 
     const pdf = await pdfjsLib.getDocument(`/api/books/${bookId}/file`).promise;
     if (token !== reader.loadToken) {
@@ -284,8 +299,16 @@ async function openReader(bookId) {
 function closeReader() {
   reader.loadToken++;
   closeNoteSheets();
+  hideHlToolbar();
   saveProgress(true);
   reader.notes = new Map();
+  reader.highlights = new Map();
+  if (textLayerInstance) {
+    try { textLayerInstance.cancel(); } catch {}
+    textLayerInstance = null;
+  }
+  textLayerDiv.innerHTML = '';
+  highlightLayer.innerHTML = '';
   if (reader.pdf) reader.pdf.destroy();
   reader.pdf = null;
   reader.book = null;
@@ -325,13 +348,14 @@ async function renderPage(num, dir = 0) {
     snap.style.height = canvas.style.height;
   }
 
+  let page, viewport;
   try {
-    const page = await reader.pdf.getPage(num);
+    page = await reader.pdf.getPage(num);
     const base = page.getViewport({ scale: 1 });
     const fitScale = pageContainer.clientWidth / base.width;
     const scale = fitScale * reader.zoom;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const viewport = page.getViewport({ scale });
+    viewport = page.getViewport({ scale });
 
     canvas.width = Math.round(viewport.width * dpr);
     canvas.height = Math.round(viewport.height * dpr);
@@ -347,6 +371,15 @@ async function renderPage(num, dir = 0) {
     reader.rendering = false;
     throw err;
   }
+
+  // Size the annotation layers to the rendered page and rebuild them.
+  highlightLayer.style.width = canvas.style.width;
+  highlightLayer.style.height = canvas.style.height;
+  textLayerDiv.style.width = canvas.style.width;
+  textLayerDiv.style.height = canvas.style.height;
+  hideHlToolbar();
+  paintHighlights();
+  renderTextLayer(page, viewport);
 
   if (snap) {
     pageWrap.appendChild(snap);
@@ -412,6 +445,230 @@ function saveProgress(instant = false) {
   else saveTimer = setTimeout(send, 800);
 }
 
+/* ---------------- Highlights ---------------- */
+
+const hlToolbar = $('hl-toolbar');
+const hlMenu = { mode: 'create', target: null };
+
+async function renderTextLayer(page, viewport) {
+  if (textLayerInstance) {
+    try { textLayerInstance.cancel(); } catch {}
+    textLayerInstance = null;
+  }
+  textLayerDiv.innerHTML = '';
+  textLayerDiv.style.setProperty('--scale-factor', viewport.scale);
+  try {
+    const tl = new pdfjsLib.TextLayer({
+      textContentSource: page.streamTextContent(),
+      container: textLayerDiv,
+      viewport,
+    });
+    textLayerInstance = tl;
+    await tl.render();
+  } catch {
+    /* cancelled mid-render — the next page's layer takes over */
+  }
+}
+
+function paintHighlights() {
+  highlightLayer.innerHTML = '';
+  const list = reader.highlights.get(reader.page) || [];
+  const w = parseFloat(canvas.style.width) || 0;
+  const h = parseFloat(canvas.style.height) || 0;
+  if (!w || !h) return;
+  for (const hl of list) {
+    for (const [x, y, rw, rh] of hl.rects) {
+      const d = document.createElement('div');
+      d.className = 'hl-rect';
+      d.style.background = HL_COLORS[hl.color] || HL_COLORS.amber;
+      d.style.left = `${x * w}px`;
+      d.style.top = `${y * h}px`;
+      d.style.width = `${rw * w}px`;
+      d.style.height = `${rh * h}px`;
+      highlightLayer.appendChild(d);
+    }
+  }
+}
+
+function showHlToolbar(mode, anchorRect, target = null) {
+  hlMenu.mode = mode;
+  hlMenu.target = target;
+  $('hl-delete').hidden = mode !== 'edit';
+  hlToolbar.hidden = false;
+
+  const tbRect = hlToolbar.getBoundingClientRect();
+  let left = anchorRect.left + anchorRect.width / 2 - tbRect.width / 2;
+  left = Math.min(Math.max(left, 10), window.innerWidth - tbRect.width - 10);
+  let top = anchorRect.bottom + 12;
+  if (top + tbRect.height > window.innerHeight - 90) top = anchorRect.top - tbRect.height - 12;
+  hlToolbar.style.left = `${left}px`;
+  hlToolbar.style.top = `${Math.max(top, 10)}px`;
+}
+
+function hideHlToolbar() {
+  hlToolbar.hidden = true;
+  hlMenu.target = null;
+  hlMenu.mode = 'create';
+}
+
+// The text layer sits above the highlight rects and swallows their pointer
+// events, so highlight taps are resolved by coordinates instead.
+function hitTestHighlight(cx, cy) {
+  const c = canvas.getBoundingClientRect();
+  if (!c.width || !c.height) return null;
+  const fx = (cx - c.left) / c.width;
+  const fy = (cy - c.top) / c.height;
+  const list = reader.highlights.get(reader.page) || [];
+  for (const hl of list) {
+    for (const [x, y, w, h] of hl.rects) {
+      if (fx >= x && fx <= x + w && fy >= y && fy <= y + h) {
+        return {
+          hl,
+          rect: new DOMRect(c.left + x * c.width, c.top + y * c.height, w * c.width, h * c.height),
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function selectionInTextLayer() {
+  const sel = window.getSelection();
+  return sel &&
+    !sel.isCollapsed &&
+    sel.rangeCount > 0 &&
+    textLayerDiv.contains(sel.anchorNode) &&
+    textLayerDiv.contains(sel.focusNode)
+    ? sel
+    : null;
+}
+
+// Convert selection client rects to page-box fractions, dropping the
+// duplicate/contained rects browsers emit for multi-span selections.
+function normalizeSelectionRects(clientRects) {
+  const c = canvas.getBoundingClientRect();
+  if (!c.width || !c.height) return [];
+  const clamp01 = (v) => Math.min(Math.max(v, 0), 1);
+  const frs = [];
+  for (const r of clientRects) {
+    if (r.width < 2 || r.height < 2) continue;
+    const x = clamp01((r.left - c.left) / c.width);
+    const y = clamp01((r.top - c.top) / c.height);
+    const w = clamp01(r.width / c.width);
+    const h = clamp01(r.height / c.height);
+    if (w <= 0.002 || h <= 0.002) continue;
+    frs.push([x, y, Math.min(w, 1 - x), Math.min(h, 1 - y)]);
+  }
+  const eps = 0.006;
+  const contained = (a, b) =>
+    a[0] >= b[0] - eps && a[1] >= b[1] - eps &&
+    a[0] + a[2] <= b[0] + b[2] + eps && a[1] + a[3] <= b[1] + b[3] + eps;
+  const out = [];
+  for (const r of frs) {
+    if (out.some((o) => contained(r, o))) continue;
+    for (let i = out.length - 1; i >= 0; i--) if (contained(out[i], r)) out.splice(i, 1);
+    out.push(r);
+  }
+  return out.slice(0, 40);
+}
+
+async function createHighlightFromSelection(color) {
+  const sel = selectionInTextLayer();
+  if (!sel || !reader.book) return hideHlToolbar();
+  const rects = normalizeSelectionRects([...sel.getRangeAt(0).getClientRects()]);
+  const text = sel.toString().replace(/\s+/g, ' ').trim().slice(0, 1000);
+  if (!rects.length || !text) return hideHlToolbar();
+
+  const page = reader.page;
+  sel.removeAllRanges();
+  hideHlToolbar();
+  try {
+    const hl = await api(`/api/books/${reader.book.id}/highlights`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ page, color, text, rects }),
+    });
+    if (!reader.highlights.has(page)) reader.highlights.set(page, []);
+    reader.highlights.get(page).push(hl);
+    if (page === reader.page) paintHighlights();
+  } catch (err) {
+    toast(err.message, { error: true });
+  }
+}
+
+async function recolorHighlight(hl, color) {
+  hideHlToolbar();
+  try {
+    await api(`/api/books/${reader.book.id}/highlights/${hl.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ color }),
+    });
+    hl.color = color;
+    paintHighlights();
+  } catch (err) {
+    toast(err.message, { error: true });
+  }
+}
+
+async function deleteHighlight(hl) {
+  hideHlToolbar();
+  try {
+    await api(`/api/books/${reader.book.id}/highlights/${hl.id}`, { method: 'DELETE' });
+    const list = reader.highlights.get(hl.page) || [];
+    reader.highlights.set(hl.page, list.filter((h) => h.id !== hl.id));
+    paintHighlights();
+  } catch (err) {
+    toast(err.message, { error: true });
+  }
+}
+
+for (const dot of hlToolbar.querySelectorAll('.hl-dot')) {
+  dot.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const color = dot.dataset.color;
+    if (hlMenu.mode === 'edit' && hlMenu.target) recolorHighlight(hlMenu.target, color);
+    else createHighlightFromSelection(color);
+  });
+}
+
+$('hl-copy').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const text =
+    hlMenu.mode === 'edit' && hlMenu.target
+      ? hlMenu.target.text
+      : window.getSelection()?.toString() || '';
+  if (text) {
+    navigator.clipboard?.writeText(text).then(
+      () => toast('Copied'),
+      () => toast('Couldn’t copy', { error: true })
+    );
+  }
+  window.getSelection()?.removeAllRanges();
+  hideHlToolbar();
+});
+
+$('hl-delete').addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (hlMenu.target) deleteHighlight(hlMenu.target);
+});
+
+let selDebounce = null;
+document.addEventListener('selectionchange', () => {
+  if (readerView.hidden) return;
+  clearTimeout(selDebounce);
+  selDebounce = setTimeout(() => {
+    const sel = selectionInTextLayer();
+    if (sel) {
+      showHlToolbar('create', sel.getRangeAt(0).getBoundingClientRect());
+    } else if (hlMenu.mode === 'create' && !hlToolbar.hidden) {
+      hideHlToolbar();
+    }
+  }, 180);
+});
+
+pageContainer.addEventListener('scroll', hideHlToolbar, { passive: true });
+
 /* ---------------- Page notes ---------------- */
 
 const noteBackdrop = $('note-backdrop');
@@ -440,23 +697,39 @@ function openNoteSheet() {
 function openNotesList() {
   const list = $('notes-list');
   list.innerHTML = '';
-  const entries = [...reader.notes.entries()].sort((a, b) => a[0] - b[0]);
+  const entries = [
+    ...[...reader.notes.entries()].map(([page, content]) => ({ type: 'note', page, content })),
+    ...[...reader.highlights.values()].flat().map((hl) => ({
+      type: 'highlight',
+      page: hl.page,
+      content: hl.text,
+      color: hl.color,
+    })),
+  ].sort((a, b) => a.page - b.page || (a.type === 'note' ? -1 : 1));
   $('notes-list-title').textContent = entries.length
-    ? `Notes in “${reader.book.title}”`
-    : 'No notes in this book yet';
-  for (const [page, content] of entries) {
+    ? `Notes & highlights in “${reader.book.title}”`
+    : 'Nothing marked in this book yet';
+  for (const entry of entries) {
     const item = document.createElement('div');
     item.className = 'note-item';
     const np = document.createElement('div');
     np.className = 'note-item-page';
-    np.textContent = `Page ${page}`;
+    if (entry.type === 'highlight') {
+      const chip = document.createElement('span');
+      chip.className = 'hl-chip';
+      chip.style.background = HL_COLORS[entry.color] || HL_COLORS.amber;
+      np.append(chip, `Page ${entry.page}`);
+    } else {
+      np.textContent = `Page ${entry.page}`;
+    }
     const nc = document.createElement('div');
     nc.className = 'note-item-content';
-    nc.textContent = content;
+    if (entry.type === 'highlight') nc.classList.add('quote');
+    nc.textContent = entry.type === 'highlight' ? `“${entry.content}”` : entry.content;
     item.append(np, nc);
     item.addEventListener('click', () => {
       closeNoteSheets();
-      goToPage(page, { instantSave: true });
+      goToPage(entry.page, { instantSave: true });
     });
     list.appendChild(item);
   }
@@ -569,6 +842,17 @@ pageSlider.addEventListener('blur', () => (sliderBubble.hidden = true));
 
 // Tap zones: left/right third turns pages, center toggles the bars.
 pageContainer.addEventListener('click', (e) => {
+  const sel = window.getSelection();
+  if (sel && !sel.isCollapsed) return; // mid-selection, not a navigation tap
+  if (!hlToolbar.hidden) {
+    hideHlToolbar();
+    return;
+  }
+  const hit = hitTestHighlight(e.clientX, e.clientY);
+  if (hit) {
+    showHlToolbar('edit', hit.rect, hit.hl);
+    return;
+  }
   if (reader.zoom > 1) return;
   const x = e.clientX / window.innerWidth;
   if (x < 0.33) goToPage(reader.page - 1);
