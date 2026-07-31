@@ -802,6 +802,15 @@ body:has(#reader-view:not([hidden])) .toast-container {
 
 .toast.error { border-left-color: var(--danger); }
 
+.toast.actionable {
+  pointer-events: auto;
+  cursor: pointer;
+  transition: transform 0.2s var(--ease-spring), background 0.2s ease;
+}
+
+.toast.actionable:hover { background: rgba(42, 36, 29, 0.96); }
+.toast.actionable:active { transform: scale(0.96); }
+
 .toast.leaving { animation: toast-out 0.3s ease both; }
 
 @keyframes toast-in {

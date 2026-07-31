@@ -97,10 +97,16 @@ async function api(path, options = {}) {
 
 /* ---------------- Toasts ---------------- */
 
-function toast(message, { error = false, duration = 2800 } = {}) {
+function toast(message, { error = false, duration = 2800, action = null } = {}) {
   const el = document.createElement('div');
-  el.className = `toast${error ? ' error' : ''}`;
+  el.className = `toast${error ? ' error' : ''}${action ? ' actionable' : ''}`;
   el.textContent = message;
+  if (action) {
+    el.addEventListener('click', () => {
+      action();
+      el.remove();
+    });
+  }
   $('toast-container').appendChild(el);
   setTimeout(() => {
     el.classList.add('leaving');
@@ -341,6 +347,18 @@ async function openReader(bookId) {
     buildThumbStrip();
     loadOutline(pdf, token); // async; reveals the contents button when done
     await enterViewMode(reader.viewMode);
+
+    // Bookmark-as-anchor (spec 10 follow-up): resume where you left off, but
+    // if the latest bookmark is on another page, offer a one-tap jump to it.
+    const latest = bookmarks
+      .slice()
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0];
+    if (latest && latest.page !== reader.page && token === reader.loadToken) {
+      toast(`🔖 Bookmark on page ${latest.page} — tap to open`, {
+        duration: 6000,
+        action: () => goToPage(latest.page, { instantSave: true }),
+      });
+    }
   } catch (err) {
     if (token !== reader.loadToken) return;
     readerLoading.hidden = false;
