@@ -53,6 +53,7 @@
       <button id="back-btn" class="icon-btn" aria-label="Back to library">←</button>
       <span id="reader-title" class="reader-title"></span>
       <span id="reader-pageinfo" class="reader-pageinfo"></span>
+      <button id="note-btn" class="icon-btn note-btn" aria-label="Note for this page">✎</button>
     </header>
 
     <div id="page-container" class="page-container">
@@ -79,6 +80,30 @@
 
   <!-- Toasts -->
   <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+  <!-- Page note sheet -->
+  <div id="note-backdrop" class="sheet-backdrop" hidden></div>
+  <div id="note-sheet" class="confirm-sheet note-sheet" hidden>
+    <div class="sheet-handle"></div>
+    <div class="note-head">
+      <span id="note-title" class="note-title"></span>
+      <span id="note-status" class="note-status"></span>
+    </div>
+    <textarea
+      id="note-text"
+      class="note-text"
+      placeholder="Jot something down about this page…"
+      maxlength="20000"
+    ></textarea>
+    <button id="all-notes-btn" class="btn btn-ghost">All notes in this book</button>
+  </div>
+
+  <!-- All-notes sheet -->
+  <div id="notes-list-sheet" class="confirm-sheet note-sheet" hidden>
+    <div class="sheet-handle"></div>
+    <p id="notes-list-title" class="sheet-message"></p>
+    <div id="notes-list" class="notes-list"></div>
+  </div>
 
   <!-- Delete confirm sheet -->
   <div id="sheet-backdrop" class="sheet-backdrop" hidden></div>

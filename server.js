@@ -28,7 +28,14 @@ db.exec(`
     has_cover    INTEGER NOT NULL DEFAULT 0,
     added_at     TEXT NOT NULL,
     last_read_at TEXT
-  )
+  );
+  CREATE TABLE IF NOT EXISTS notes (
+    book_id    TEXT NOT NULL,
+    page       INTEGER NOT NULL,
+    content    TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (book_id, page)
+  );
 `);
 
 const app = express();
@@ -58,13 +65,15 @@ function bookRow(row) {
     hasCover: !!row.has_cover,
     addedAt: row.added_at,
     lastReadAt: row.last_read_at,
+    noteCount: row.note_count ?? 0,
   };
 }
 
 app.get('/api/books', (req, res) => {
   const rows = db
     .prepare(
-      `SELECT * FROM books
+      `SELECT b.*, (SELECT COUNT(*) FROM notes n WHERE n.book_id = b.id) AS note_count
+       FROM books b
        ORDER BY last_read_at IS NULL, last_read_at DESC, added_at DESC`
     )
     .all();
@@ -137,10 +146,41 @@ app.patch('/api/books/:id', (req, res) => {
   res.json(bookRow(db.prepare('SELECT * FROM books WHERE id = ?').get(row.id)));
 });
 
+app.get('/api/books/:id/notes', (req, res) => {
+  const row = getBookOr404(req, res);
+  if (!row) return;
+  const notes = db
+    .prepare('SELECT page, content, updated_at FROM notes WHERE book_id = ? ORDER BY page')
+    .all(row.id);
+  res.json(notes.map((n) => ({ page: n.page, content: n.content, updatedAt: n.updated_at })));
+});
+
+// Upsert the note for a page; empty content deletes it.
+app.put('/api/books/:id/notes/:page', (req, res) => {
+  const row = getBookOr404(req, res);
+  if (!row) return;
+  const page = parseInt(req.params.page, 10);
+  if (!Number.isInteger(page) || page < 1 || page > row.page_count) {
+    return res.status(400).json({ error: 'Page out of range' });
+  }
+  const content = String(req.body.content ?? '').slice(0, 20000);
+  if (!content.trim()) {
+    db.prepare('DELETE FROM notes WHERE book_id = ? AND page = ?').run(row.id, page);
+    return res.json({ page, deleted: true });
+  }
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO notes (book_id, page, content, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(book_id, page) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`
+  ).run(row.id, page, content, now);
+  res.json({ page, content, updatedAt: now });
+});
+
 app.delete('/api/books/:id', (req, res) => {
   const row = getBookOr404(req, res);
   if (!row) return;
   db.prepare('DELETE FROM books WHERE id = ?').run(row.id);
+  db.prepare('DELETE FROM notes WHERE book_id = ?').run(row.id);
   fs.unlink(path.join(UPLOADS_DIR, row.filename), () => {});
   fs.unlink(path.join(COVERS_DIR, `${row.id}.png`), () => {});
   res.json({ ok: true });

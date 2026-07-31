@@ -31,6 +31,7 @@ const reader = {
   pendingPage: null,
   pendingDir: 0,
   loadToken: 0,
+  notes: new Map(),
 };
 
 /* ---------------- API ---------------- */
@@ -150,10 +151,13 @@ function renderCard(book, index) {
   title.textContent = book.title;
   const sub = document.createElement('div');
   sub.className = 'book-sub';
-  const progressLabel = book.lastReadAt
+  let progressLabel = book.lastReadAt
     ? `p. ${book.currentPage} / ${book.pageCount}`
     : `${book.pageCount} pages`;
-  sub.innerHTML = `<span>${progressLabel}</span>`;
+  if (book.noteCount > 0) progressLabel += ` · ✎ ${book.noteCount}`;
+  const labelSpan = document.createElement('span');
+  labelSpan.textContent = progressLabel;
+  sub.appendChild(labelSpan);
   const del = document.createElement('button');
   del.className = 'delete-btn';
   del.textContent = '🗑';
@@ -258,6 +262,10 @@ async function openReader(bookId) {
     pageSlider.max = book.pageCount;
     pageSlider.value = book.currentPage;
 
+    const notes = await api(`/api/books/${bookId}/notes`).catch(() => []);
+    if (token !== reader.loadToken) return;
+    reader.notes = new Map(notes.map((n) => [n.page, n.content]));
+
     const pdf = await pdfjsLib.getDocument(`/api/books/${bookId}/file`).promise;
     if (token !== reader.loadToken) {
       pdf.destroy();
@@ -275,7 +283,9 @@ async function openReader(bookId) {
 
 function closeReader() {
   reader.loadToken++;
+  closeNoteSheets();
   saveProgress(true);
+  reader.notes = new Map();
   if (reader.pdf) reader.pdf.destroy();
   reader.pdf = null;
   reader.book = null;
@@ -365,6 +375,7 @@ function updatePageUI() {
   $('reader-pageinfo').textContent = `${reader.page} / ${reader.book.pageCount}`;
   pageSlider.value = reader.page;
   updateSliderFill();
+  $('note-btn').classList.toggle('has-note', reader.notes.has(reader.page));
 }
 
 function updateSliderFill() {
@@ -400,6 +411,121 @@ function saveProgress(instant = false) {
   if (instant) send();
   else saveTimer = setTimeout(send, 800);
 }
+
+/* ---------------- Page notes ---------------- */
+
+const noteBackdrop = $('note-backdrop');
+const noteSheet = $('note-sheet');
+const noteText = $('note-text');
+const noteStatus = $('note-status');
+const notesListSheet = $('notes-list-sheet');
+
+const note = { page: null, dirty: false, saveTimer: null, statusTimer: null };
+
+function openNoteSheet() {
+  if (!reader.book) return;
+  note.page = reader.page;
+  note.dirty = false;
+  $('note-title').textContent = `Note · page ${note.page}`;
+  noteText.value = reader.notes.get(note.page) || '';
+  noteStatus.textContent = '';
+  notesListSheet.hidden = true;
+  noteBackdrop.hidden = false;
+  noteSheet.hidden = false;
+  noteBackdrop.classList.remove('leaving');
+  noteSheet.classList.remove('leaving');
+  noteText.focus();
+}
+
+function openNotesList() {
+  const list = $('notes-list');
+  list.innerHTML = '';
+  const entries = [...reader.notes.entries()].sort((a, b) => a[0] - b[0]);
+  $('notes-list-title').textContent = entries.length
+    ? `Notes in “${reader.book.title}”`
+    : 'No notes in this book yet';
+  for (const [page, content] of entries) {
+    const item = document.createElement('div');
+    item.className = 'note-item';
+    const np = document.createElement('div');
+    np.className = 'note-item-page';
+    np.textContent = `Page ${page}`;
+    const nc = document.createElement('div');
+    nc.className = 'note-item-content';
+    nc.textContent = content;
+    item.append(np, nc);
+    item.addEventListener('click', () => {
+      closeNoteSheets();
+      goToPage(page, { instantSave: true });
+    });
+    list.appendChild(item);
+  }
+  noteSheet.hidden = true;
+  noteBackdrop.hidden = false;
+  notesListSheet.hidden = false;
+  noteBackdrop.classList.remove('leaving');
+  notesListSheet.classList.remove('leaving');
+}
+
+function closeNoteSheets() {
+  flushNoteSave();
+  const open = [noteSheet, notesListSheet].filter((el) => !el.hidden);
+  if (!open.length) return;
+  for (const el of open) {
+    el.classList.add('leaving');
+    el.addEventListener('animationend', () => (el.hidden = true), { once: true });
+  }
+  noteBackdrop.classList.add('leaving');
+  noteBackdrop.addEventListener('animationend', () => (noteBackdrop.hidden = true), {
+    once: true,
+  });
+}
+
+function saveNote() {
+  if (note.page === null || !reader.book) return;
+  const page = note.page;
+  const content = noteText.value;
+  note.dirty = false;
+  fetch(`/api/books/${reader.book.id}/notes/${page}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+    keepalive: true,
+  })
+    .then((res) => {
+      if (!res.ok) throw new Error('save failed');
+      if (content.trim()) reader.notes.set(page, content);
+      else reader.notes.delete(page);
+      if (reader.book && page === reader.page) {
+        $('note-btn').classList.toggle('has-note', reader.notes.has(page));
+      }
+      noteStatus.textContent = 'Saved ✓';
+      clearTimeout(note.statusTimer);
+      note.statusTimer = setTimeout(() => (noteStatus.textContent = ''), 1600);
+    })
+    .catch(() => {
+      noteStatus.textContent = 'Couldn’t save — retrying…';
+      note.dirty = true;
+      clearTimeout(note.saveTimer);
+      note.saveTimer = setTimeout(saveNote, 2000);
+    });
+}
+
+function flushNoteSave() {
+  clearTimeout(note.saveTimer);
+  if (note.dirty) saveNote();
+}
+
+noteText.addEventListener('input', () => {
+  note.dirty = true;
+  noteStatus.textContent = 'Saving…';
+  clearTimeout(note.saveTimer);
+  note.saveTimer = setTimeout(saveNote, 700);
+});
+
+$('note-btn').addEventListener('click', openNoteSheet);
+$('all-notes-btn').addEventListener('click', openNotesList);
+noteBackdrop.addEventListener('click', closeNoteSheets);
 
 /* Reader controls */
 
@@ -483,14 +609,26 @@ pageContainer.addEventListener(
 
 document.addEventListener('keydown', (e) => {
   if (readerView.hidden) return;
+  if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') {
+    if (e.key === 'Escape') closeNoteSheets();
+    return;
+  }
+  if (!noteSheet.hidden || !notesListSheet.hidden) {
+    if (e.key === 'Escape') closeNoteSheets();
+    return;
+  }
   if (e.key === 'ArrowRight' || e.key === ' ') goToPage(reader.page + 1);
   else if (e.key === 'ArrowLeft') goToPage(reader.page - 1);
+  else if (e.key === 'n') openNoteSheet();
   else if (e.key === 'Escape') location.hash = '';
 });
 
-// Flush progress if the tab is backgrounded or closed mid-read.
+// Flush progress and any pending note if the tab is backgrounded or closed.
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') saveProgress(true);
+  if (document.visibilityState === 'hidden') {
+    saveProgress(true);
+    flushNoteSave();
+  }
 });
 
 let resizeTimer = null;

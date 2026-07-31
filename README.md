@@ -14,6 +14,9 @@ remembers exactly which page you were on — per book.
   - page slider to scrub through the book, zoom in/out with panning
   - keyboard arrows / space on desktop
 - **Progress auto-saves** as you read and each book reopens where you left off
+- **Per-page notes**: tap ✎ (or press `n`) to jot a note on the page you're
+  reading — it auto-saves as you type, pages with notes get an amber badge,
+  and an "all notes" list lets you jump straight to any annotated page
 - Installable as a home-screen app on iOS/Android (PWA manifest included)
 
 ## Running locally
