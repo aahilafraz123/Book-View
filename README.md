@@ -69,28 +69,30 @@ docker run -p 3000:3000 -v bookview-data:/data book-view
 
 ### Configuration
 
-| Env var         | Default  | Meaning                                        |
-| --------------- | -------- | ---------------------------------------------- |
-| `PORT`          | `3000`   | HTTP port                                      |
-| `DATA_DIR`      | `./data` | Where PDFs + the SQLite DB live                |
-| `MAX_UPLOAD_MB` | `100`    | Per-file upload size limit                     |
-| `AUTH_PASSWORD` | _(unset)_ | Set to require login before any API access    |
+| Env var         | Default   | Meaning                                            |
+| --------------- | --------- | -------------------------------------------------- |
+| `PORT`          | `3000`    | HTTP port                                          |
+| `DATA_DIR`      | `./data`  | Where PDFs + the SQLite DB live                    |
+| `MAX_UPLOAD_MB` | `100`     | Per-file upload size limit                         |
+| `AUTH_MODE`     | _(unset)_ | `accounts` → multi-user accounts with per-user libraries |
+| `INVITE_CODE`   | _(unset)_ | In accounts mode, required to create an account    |
+| `AUTH_PASSWORD` | _(unset)_ | Single shared password gate (ignored in accounts mode) |
 
-### Locking it down for public deployment
+### Auth modes
 
-Set `AUTH_PASSWORD` to any strong passphrase and the whole app goes behind a
-login gate:
+- **Open** (nothing set): no login — for local use and tests.
+- **Password** (`AUTH_PASSWORD=...`): one shared password, one shared library.
+- **Accounts** (`AUTH_MODE=accounts`): username + password accounts, each with
+  their **own private library**, notes, highlights, bookmarks, and stats.
+  Set `INVITE_CODE` so only people you give the code to can sign up. The
+  first account created adopts any books uploaded before accounts were
+  enabled. Passwords are scrypt-hashed; every book/file/annotation route is
+  ownership-checked server-side.
 
-- Every `/api` route returns 401 without a valid session — books, files,
-  covers, notes, everything.
-- Login sets a 90-day `HttpOnly` `SameSite=Lax` session cookie (`Secure` when
-  served over HTTPS); session tokens are stored hashed in SQLite, so they
-  survive restarts and can be revoked ("Sign out" lives in the stats sheet).
-- Password comparison is constant-time and login is rate-limited to 10
-  attempts per IP per 15 minutes.
-
-Leave `AUTH_PASSWORD` unset for open local use. Multi-user accounts,
-per-user libraries, and storage limits remain the planned next step.
+All modes share the session machinery: 90-day `HttpOnly` `SameSite=Lax`
+cookies (`Secure` over HTTPS), tokens stored hashed in SQLite (revocable via
+"Sign out" in the stats sheet), constant-time comparisons, and a
+10-attempts-per-IP/15-min login throttle.
 
 ## Architecture
 

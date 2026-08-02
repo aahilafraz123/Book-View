@@ -101,20 +101,49 @@ async function api(path, options = {}) {
 
 /* ---------------- Login gate ---------------- */
 
+const auth = { mode: 'open', inviteRequired: false, username: null, signup: false };
+
+function configureLoginForm() {
+  const accounts = auth.mode === 'accounts';
+  $('login-username').hidden = !accounts;
+  $('login-username').required = accounts;
+  $('login-invite').hidden = !(accounts && auth.signup && auth.inviteRequired);
+  $('login-toggle').hidden = !accounts;
+  $('login-submit').textContent = accounts ? (auth.signup ? 'Create account' : 'Sign in') : 'Unlock';
+  $('login-toggle').textContent = auth.signup ? 'Have an account? Sign in' : 'Create an account';
+  document.querySelector('.login-sub').textContent = auth.signup
+    ? 'Pick a username and password.'
+    : 'This library is private.';
+  $('login-password').autocomplete = auth.signup ? 'new-password' : 'current-password';
+}
+
 function showLogin() {
   $('login-view').hidden = false;
-  $('login-password').focus();
+  configureLoginForm();
+  (auth.mode === 'accounts' ? $('login-username') : $('login-password')).focus();
 }
+
+$('login-toggle').addEventListener('click', () => {
+  auth.signup = !auth.signup;
+  $('login-error').hidden = true;
+  configureLoginForm();
+});
 
 $('login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const errEl = $('login-error');
   errEl.hidden = true;
   try {
-    const res = await fetch('/api/login', {
+    const endpoint = auth.signup ? '/api/signup' : '/api/login';
+    const payload = { password: $('login-password').value };
+    if (auth.mode === 'accounts') {
+      payload.username = $('login-username').value;
+      if (auth.signup) payload.invite = $('login-invite').value;
+    }
+    const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: $('login-password').value }),
+      body: JSON.stringify(payload),
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error || 'Login failed');
@@ -127,14 +156,18 @@ $('login-form').addEventListener('submit', async (e) => {
     void card.offsetWidth;
     card.classList.add('shake');
     $('login-password').value = '';
-    $('login-password').focus();
   }
 });
 
 fetch('/api/auth-status')
   .then((r) => r.json())
   .then((s) => {
+    auth.mode = s.mode || (s.authRequired ? 'password' : 'open');
+    auth.inviteRequired = !!s.inviteRequired;
+    auth.username = s.username || null;
     $('logout-btn').hidden = !s.authRequired;
+    if (auth.username) $('logout-btn').textContent = `Sign out (${auth.username})`;
+    if (!s.authenticated && s.authRequired) showLogin();
   })
   .catch(() => {});
 

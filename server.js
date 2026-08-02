@@ -74,6 +74,12 @@ db.exec(`
     created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS users (
+    id            TEXT PRIMARY KEY,
+    username      TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    password_hash TEXT NOT NULL,
+    created_at    TEXT NOT NULL
+  );
 `);
 
 // Additive migrations for databases created before these columns existed.
@@ -84,7 +90,9 @@ function ensureColumn(table, col, ddl) {
 ensureColumn('books', 'view_mode', "TEXT NOT NULL DEFAULT 'paged'");
 ensureColumn('books', 'text_extracted', 'INTEGER NOT NULL DEFAULT 0');
 ensureColumn('books', 'finished_at', 'TEXT');
+ensureColumn('books', 'user_id', 'TEXT');
 ensureColumn('highlights', 'note', "TEXT NOT NULL DEFAULT ''");
+ensureColumn('auth_sessions', 'user_id', 'TEXT');
 
 const HIGHLIGHT_COLORS = new Set(['amber', 'green', 'blue', 'pink']);
 const VIEW_MODES = new Set(['paged', 'scroll', 'reflow']);
@@ -152,12 +160,31 @@ function ftsQuery(q) {
   return tokens.map((t) => `"${t}"`).join(' ');
 }
 
-/* ---------------- Auth (single-user password gate) ---------------- */
-// Set AUTH_PASSWORD to require login; unset = open (local dev/tests).
+/* ---------------- Auth ---------------- */
+// Three modes:
+//   accounts — AUTH_MODE=accounts: username/password accounts, per-user
+//              libraries; signup needs INVITE_CODE when one is set.
+//   password — AUTH_PASSWORD set: single shared password, shared library.
+//   open     — neither set: no login (local dev/tests).
 
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || '';
+const INVITE_CODE = process.env.INVITE_CODE || '';
+const AUTH_MODE =
+  process.env.AUTH_MODE === 'accounts' ? 'accounts' : AUTH_PASSWORD ? 'password' : 'open';
 const SESSION_DAYS = 90;
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  return `${salt}:${crypto.scryptSync(password, salt, 64).toString('hex')}`;
+}
+
+function verifyPassword(password, stored) {
+  const [salt, hash] = String(stored).split(':');
+  if (!salt || !hash) return false;
+  const candidate = crypto.scryptSync(password, salt, 64);
+  return crypto.timingSafeEqual(candidate, Buffer.from(hash, 'hex'));
+}
 
 function parseCookies(req) {
   const out = {};
@@ -180,12 +207,33 @@ function throttled(ip) {
   return entry.count >= 10;
 }
 
-function hasValidSession(req) {
+function sessionFor(req) {
   const token = parseCookies(req).bv_session;
-  if (!token) return false;
-  return !!db
-    .prepare('SELECT 1 FROM auth_sessions WHERE token_hash = ? AND expires_at > ?')
-    .get(sha256(token), new Date().toISOString());
+  if (!token) return null;
+  return (
+    db
+      .prepare('SELECT * FROM auth_sessions WHERE token_hash = ? AND expires_at > ?')
+      .get(sha256(token), new Date().toISOString()) || null
+  );
+}
+
+function issueSession(res, req, userId = null) {
+  const token = crypto.randomBytes(32).toString('hex');
+  const now = new Date();
+  db.prepare('DELETE FROM auth_sessions WHERE expires_at <= ?').run(now.toISOString());
+  db.prepare(
+    'INSERT INTO auth_sessions (token_hash, created_at, expires_at, user_id) VALUES (?, ?, ?, ?)'
+  ).run(
+    sha256(token),
+    now.toISOString(),
+    new Date(now.getTime() + SESSION_DAYS * 86400000).toISOString(),
+    userId
+  );
+  const secure = req.secure || req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
+  res.setHeader(
+    'Set-Cookie',
+    `bv_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}${secure}`
+  );
 }
 
 const app = express();
@@ -193,14 +241,72 @@ app.set('trust proxy', 1);
 app.use(express.json());
 
 app.get('/api/auth-status', (req, res) => {
-  res.json({ authRequired: !!AUTH_PASSWORD, authenticated: !AUTH_PASSWORD || hasValidSession(req) });
+  const session = sessionFor(req);
+  let username = null;
+  if (AUTH_MODE === 'accounts' && session?.user_id) {
+    username = db.prepare('SELECT username FROM users WHERE id = ?').get(session.user_id)?.username;
+  }
+  res.json({
+    mode: AUTH_MODE,
+    authRequired: AUTH_MODE !== 'open',
+    inviteRequired: AUTH_MODE === 'accounts' && !!INVITE_CODE,
+    authenticated:
+      AUTH_MODE === 'open' || (AUTH_MODE === 'accounts' ? !!(session && username) : !!session),
+    username,
+  });
 });
 
-app.post('/api/login', (req, res) => {
-  if (!AUTH_PASSWORD) return res.json({ ok: true });
+app.post('/api/signup', (req, res) => {
+  if (AUTH_MODE !== 'accounts') return res.status(400).json({ error: 'Accounts are not enabled' });
   const ip = req.ip || 'unknown';
   if (throttled(ip)) {
     return res.status(429).json({ error: 'Too many attempts — try again in a few minutes' });
+  }
+  if (INVITE_CODE && String(req.body.invite || '') !== INVITE_CODE) {
+    loginAttempts.get(ip).count++;
+    return res.status(403).json({ error: 'Invalid invite code' });
+  }
+  const username = String(req.body.username || '').trim();
+  const password = String(req.body.password || '');
+  if (!/^[a-zA-Z0-9_.-]{2,30}$/.test(username)) {
+    return res.status(400).json({ error: 'Username: 2–30 letters, numbers, _ . -' });
+  }
+  if (password.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  }
+  if (db.prepare('SELECT 1 FROM users WHERE username = ?').get(username)) {
+    return res.status(409).json({ error: 'That username is taken' });
+  }
+  const isFirstUser = db.prepare('SELECT COUNT(*) AS n FROM users').get().n === 0;
+  const id = crypto.randomUUID();
+  db.prepare('INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)').run(
+    id,
+    username,
+    hashPassword(password),
+    new Date().toISOString()
+  );
+  // The first account adopts any books uploaded before accounts were enabled.
+  if (isFirstUser) db.prepare('UPDATE books SET user_id = ? WHERE user_id IS NULL').run(id);
+  issueSession(res, req, id);
+  res.status(201).json({ ok: true, username });
+});
+
+app.post('/api/login', (req, res) => {
+  if (AUTH_MODE === 'open') return res.json({ ok: true });
+  const ip = req.ip || 'unknown';
+  if (throttled(ip)) {
+    return res.status(429).json({ error: 'Too many attempts — try again in a few minutes' });
+  }
+  if (AUTH_MODE === 'accounts') {
+    const user = db
+      .prepare('SELECT * FROM users WHERE username = ?')
+      .get(String(req.body.username || '').trim());
+    if (!user || !verifyPassword(String(req.body.password || ''), user.password_hash)) {
+      loginAttempts.get(ip).count++;
+      return res.status(401).json({ error: 'Wrong username or password' });
+    }
+    issueSession(res, req, user.id);
+    return res.json({ ok: true, username: user.username });
   }
   const supplied = Buffer.from(sha256(String(req.body.password || '')));
   const expected = Buffer.from(sha256(AUTH_PASSWORD));
@@ -208,19 +314,7 @@ app.post('/api/login', (req, res) => {
     loginAttempts.get(ip).count++;
     return res.status(401).json({ error: 'Wrong password' });
   }
-  const token = crypto.randomBytes(32).toString('hex');
-  const now = new Date();
-  db.prepare('DELETE FROM auth_sessions WHERE expires_at <= ?').run(now.toISOString());
-  db.prepare('INSERT INTO auth_sessions (token_hash, created_at, expires_at) VALUES (?, ?, ?)').run(
-    sha256(token),
-    now.toISOString(),
-    new Date(now.getTime() + SESSION_DAYS * 86400000).toISOString()
-  );
-  const secure = req.secure || req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
-  res.setHeader(
-    'Set-Cookie',
-    `bv_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}${secure}`
-  );
+  issueSession(res, req, null);
   res.json({ ok: true });
 });
 
@@ -232,9 +326,19 @@ app.post('/api/logout', (req, res) => {
 });
 
 // Everything else under /api requires a session when auth is on.
+// req.userId scopes all data access: a user's id in accounts mode, else null.
 app.use('/api', (req, res, next) => {
-  if (!AUTH_PASSWORD || hasValidSession(req)) return next();
-  res.status(401).json({ error: 'Unauthorized' });
+  if (AUTH_MODE === 'open') {
+    req.userId = null;
+    return next();
+  }
+  const session = sessionFor(req);
+  if (!session) return res.status(401).json({ error: 'Unauthorized' });
+  if (AUTH_MODE === 'accounts' && !session.user_id) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  req.userId = session.user_id || null;
+  next();
 });
 
 const upload = multer({
@@ -301,9 +405,10 @@ app.get('/api/books', (req, res) => {
          (SELECT COUNT(*) FROM notes n WHERE n.book_id = b.id) AS note_count,
          (SELECT COUNT(*) FROM highlights h WHERE h.book_id = b.id) AS highlight_count
        FROM books b
+       WHERE b.user_id IS ?
        ORDER BY last_read_at IS NULL, last_read_at DESC, added_at DESC`
     )
-    .all();
+    .all(req.userId);
   res.json(rows.map(bookRow));
 });
 
@@ -331,16 +436,26 @@ app.post('/api/books', upload.single('file'), async (req, res) => {
 
   const id = crypto.randomUUID();
   db.prepare(
-    `INSERT INTO books (id, title, filename, size_bytes, page_count, added_at)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(id, title, path.basename(filePath), req.file.size, pageCount, new Date().toISOString());
+    `INSERT INTO books (id, title, filename, size_bytes, page_count, added_at, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    id,
+    title,
+    path.basename(filePath),
+    req.file.size,
+    pageCount,
+    new Date().toISOString(),
+    req.userId
+  );
 
   queueExtraction(id); // index text for search in the background
   res.status(201).json(bookRow(db.prepare('SELECT * FROM books WHERE id = ?').get(id)));
 });
 
 function getBookOr404(req, res) {
-  const row = db.prepare('SELECT * FROM books WHERE id = ?').get(req.params.id);
+  const row = db
+    .prepare('SELECT * FROM books WHERE id = ? AND user_id IS ?')
+    .get(req.params.id, req.userId);
   if (!row) res.status(404).json({ error: 'Book not found' });
   return row;
 }
@@ -541,9 +656,10 @@ app.get('/api/search', (req, res) => {
         `SELECT f.book_id AS bookId, b.title, f.page,
                 snippet(book_pages_fts, 2, '<b>', '</b>', '…', 10) AS snippet
          FROM book_pages_fts f JOIN books b ON b.id = f.book_id
-         WHERE book_pages_fts MATCH ? ORDER BY b.title, f.page LIMIT 50`
+         WHERE b.user_id IS ? AND book_pages_fts MATCH ?
+         ORDER BY b.title, f.page LIMIT 50`
       )
-      .all(match);
+      .all(req.userId, match);
     res.json(rows);
   } catch {
     res.json([]);
@@ -630,8 +746,12 @@ app.get('/api/books/:id/export.md', (req, res) => {
 
 app.get('/api/stats', (req, res) => {
   const sessions = db
-    .prepare("SELECT book_id, started_at, ended_at, pages_turned FROM reading_sessions WHERE ended_at >= datetime('now', '-40 days')")
-    .all();
+    .prepare(
+      `SELECT s.book_id, s.started_at, s.ended_at, s.pages_turned
+       FROM reading_sessions s JOIN books b ON b.id = s.book_id
+       WHERE b.user_id IS ? AND s.ended_at >= datetime('now', '-40 days')`
+    )
+    .all(req.userId);
 
   const dayKey = (iso) => iso.slice(0, 10);
   const byDay = new Map();
@@ -663,12 +783,14 @@ app.get('/api/stats', (req, res) => {
   const totals = db
     .prepare(
       `SELECT
-        (SELECT COALESCE(SUM((julianday(ended_at) - julianday(started_at)) * 1440), 0) FROM reading_sessions) AS minutes,
-        (SELECT COALESCE(SUM(pages_turned), 0) FROM reading_sessions) AS pages,
-        (SELECT COUNT(*) FROM books WHERE last_read_at IS NOT NULL) AS booksStarted,
-        (SELECT COUNT(*) FROM books WHERE finished_at IS NOT NULL) AS booksFinished`
+        (SELECT COALESCE(SUM((julianday(s.ended_at) - julianday(s.started_at)) * 1440), 0)
+           FROM reading_sessions s JOIN books b ON b.id = s.book_id WHERE b.user_id IS ?) AS minutes,
+        (SELECT COALESCE(SUM(s.pages_turned), 0)
+           FROM reading_sessions s JOIN books b ON b.id = s.book_id WHERE b.user_id IS ?) AS pages,
+        (SELECT COUNT(*) FROM books WHERE user_id IS ? AND last_read_at IS NOT NULL) AS booksStarted,
+        (SELECT COUNT(*) FROM books WHERE user_id IS ? AND finished_at IS NOT NULL) AS booksFinished`
     )
-    .get();
+    .get(req.userId, req.userId, req.userId, req.userId);
 
   res.json({
     streak,

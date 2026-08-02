@@ -26,14 +26,24 @@
       <p class="login-sub">This library is private.</p>
       <form id="login-form">
         <input
+          type="text"
+          id="login-username"
+          placeholder="Username"
+          autocomplete="username"
+          autocapitalize="none"
+          hidden
+        />
+        <input
           type="password"
           id="login-password"
           placeholder="Password"
           autocomplete="current-password"
           required
         />
-        <button type="submit" class="btn btn-primary">Unlock</button>
+        <input type="text" id="login-invite" placeholder="Invite code" autocomplete="off" hidden />
+        <button type="submit" class="btn btn-primary" id="login-submit">Unlock</button>
       </form>
+      <button id="login-toggle" class="login-toggle" hidden>Create an account</button>
       <p id="login-error" class="login-error" hidden></p>
     </div>
   </div>
