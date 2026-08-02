@@ -69,6 +69,11 @@ db.exec(`
   );
   CREATE VIRTUAL TABLE IF NOT EXISTS book_pages_fts
     USING fts5(book_id UNINDEXED, page UNINDEXED, text);
+  CREATE TABLE IF NOT EXISTS auth_sessions (
+    token_hash TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  );
 `);
 
 // Additive migrations for databases created before these columns existed.
@@ -147,8 +152,90 @@ function ftsQuery(q) {
   return tokens.map((t) => `"${t}"`).join(' ');
 }
 
+/* ---------------- Auth (single-user password gate) ---------------- */
+// Set AUTH_PASSWORD to require login; unset = open (local dev/tests).
+
+const AUTH_PASSWORD = process.env.AUTH_PASSWORD || '';
+const SESSION_DAYS = 90;
+const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
+
+function parseCookies(req) {
+  const out = {};
+  for (const part of (req.headers.cookie || '').split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+  }
+  return out;
+}
+
+// Brute-force throttle: 10 attempts per IP per 15 minutes.
+const loginAttempts = new Map();
+function throttled(ip) {
+  const now = Date.now();
+  const entry = loginAttempts.get(ip);
+  if (!entry || now > entry.resetAt) {
+    loginAttempts.set(ip, { count: 0, resetAt: now + 15 * 60 * 1000 });
+    return false;
+  }
+  return entry.count >= 10;
+}
+
+function hasValidSession(req) {
+  const token = parseCookies(req).bv_session;
+  if (!token) return false;
+  return !!db
+    .prepare('SELECT 1 FROM auth_sessions WHERE token_hash = ? AND expires_at > ?')
+    .get(sha256(token), new Date().toISOString());
+}
+
 const app = express();
+app.set('trust proxy', 1);
 app.use(express.json());
+
+app.get('/api/auth-status', (req, res) => {
+  res.json({ authRequired: !!AUTH_PASSWORD, authenticated: !AUTH_PASSWORD || hasValidSession(req) });
+});
+
+app.post('/api/login', (req, res) => {
+  if (!AUTH_PASSWORD) return res.json({ ok: true });
+  const ip = req.ip || 'unknown';
+  if (throttled(ip)) {
+    return res.status(429).json({ error: 'Too many attempts — try again in a few minutes' });
+  }
+  const supplied = Buffer.from(sha256(String(req.body.password || '')));
+  const expected = Buffer.from(sha256(AUTH_PASSWORD));
+  if (!crypto.timingSafeEqual(supplied, expected)) {
+    loginAttempts.get(ip).count++;
+    return res.status(401).json({ error: 'Wrong password' });
+  }
+  const token = crypto.randomBytes(32).toString('hex');
+  const now = new Date();
+  db.prepare('DELETE FROM auth_sessions WHERE expires_at <= ?').run(now.toISOString());
+  db.prepare('INSERT INTO auth_sessions (token_hash, created_at, expires_at) VALUES (?, ?, ?)').run(
+    sha256(token),
+    now.toISOString(),
+    new Date(now.getTime() + SESSION_DAYS * 86400000).toISOString()
+  );
+  const secure = req.secure || req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
+  res.setHeader(
+    'Set-Cookie',
+    `bv_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}${secure}`
+  );
+  res.json({ ok: true });
+});
+
+app.post('/api/logout', (req, res) => {
+  const token = parseCookies(req).bv_session;
+  if (token) db.prepare('DELETE FROM auth_sessions WHERE token_hash = ?').run(sha256(token));
+  res.setHeader('Set-Cookie', 'bv_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
+  res.json({ ok: true });
+});
+
+// Everything else under /api requires a session when auth is on.
+app.use('/api', (req, res, next) => {
+  if (!AUTH_PASSWORD || hasValidSession(req)) return next();
+  res.status(401).json({ error: 'Unauthorized' });
+});
 
 const upload = multer({
   storage: multer.diskStorage({

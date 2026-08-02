@@ -18,6 +18,26 @@
     <div class="grain"></div>
   </div>
 
+  <!-- Login gate -->
+  <div id="login-view" class="login-view" hidden>
+    <div class="login-card">
+      <div class="login-icon">📚</div>
+      <h1>Book View</h1>
+      <p class="login-sub">This library is private.</p>
+      <form id="login-form">
+        <input
+          type="password"
+          id="login-password"
+          placeholder="Password"
+          autocomplete="current-password"
+          required
+        />
+        <button type="submit" class="btn btn-primary">Unlock</button>
+      </form>
+      <p id="login-error" class="login-error" hidden></p>
+    </div>
+  </div>
+
   <!-- Library -->
   <main id="library-view" class="view">
     <header class="library-header">
@@ -192,6 +212,7 @@
     <div class="sheet-handle"></div>
     <p class="sheet-message">Reading stats</p>
     <div id="stats-body" class="stats-body"></div>
+    <button id="logout-btn" class="btn btn-ghost" hidden>Sign out on this device</button>
   </div>
 
   <!-- Delete confirm sheet -->

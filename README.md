@@ -69,16 +69,28 @@ docker run -p 3000:3000 -v bookview-data:/data book-view
 
 ### Configuration
 
-| Env var         | Default  | Meaning                          |
-| --------------- | -------- | -------------------------------- |
-| `PORT`          | `3000`   | HTTP port                        |
-| `DATA_DIR`      | `./data` | Where PDFs + the SQLite DB live  |
-| `MAX_UPLOAD_MB` | `100`    | Per-file upload size limit       |
+| Env var         | Default  | Meaning                                        |
+| --------------- | -------- | ---------------------------------------------- |
+| `PORT`          | `3000`   | HTTP port                                      |
+| `DATA_DIR`      | `./data` | Where PDFs + the SQLite DB live                |
+| `MAX_UPLOAD_MB` | `100`    | Per-file upload size limit                     |
+| `AUTH_PASSWORD` | _(unset)_ | Set to require login before any API access    |
 
-> **Note:** there is no authentication yet — anyone with the URL can see and
-> upload books. Keep the URL private, put it behind basic auth on a reverse
-> proxy, or wait for the accounts feature. Accounts, per-user libraries, and
-> storage limits are the planned next step.
+### Locking it down for public deployment
+
+Set `AUTH_PASSWORD` to any strong passphrase and the whole app goes behind a
+login gate:
+
+- Every `/api` route returns 401 without a valid session — books, files,
+  covers, notes, everything.
+- Login sets a 90-day `HttpOnly` `SameSite=Lax` session cookie (`Secure` when
+  served over HTTPS); session tokens are stored hashed in SQLite, so they
+  survive restarts and can be revoked ("Sign out" lives in the stats sheet).
+- Password comparison is constant-time and login is rate-limited to 10
+  attempts per IP per 15 minutes.
+
+Leave `AUTH_PASSWORD` unset for open local use. Multi-user accounts,
+per-user libraries, and storage limits remain the planned next step.
 
 ## Architecture
 

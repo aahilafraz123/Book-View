@@ -91,9 +91,57 @@ function closeReaderSheets() {
 async function api(path, options = {}) {
   const res = await fetch(path, options);
   const body = await res.json().catch(() => ({}));
+  if (res.status === 401) {
+    showLogin();
+    throw new Error('Signed out');
+  }
   if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
   return body;
 }
+
+/* ---------------- Login gate ---------------- */
+
+function showLogin() {
+  $('login-view').hidden = false;
+  $('login-password').focus();
+}
+
+$('login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errEl = $('login-error');
+  errEl.hidden = true;
+  try {
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: $('login-password').value }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || 'Login failed');
+    location.reload();
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.hidden = false;
+    const card = document.querySelector('.login-card');
+    card.classList.remove('shake');
+    void card.offsetWidth;
+    card.classList.add('shake');
+    $('login-password').value = '';
+    $('login-password').focus();
+  }
+});
+
+fetch('/api/auth-status')
+  .then((r) => r.json())
+  .then((s) => {
+    $('logout-btn').hidden = !s.authRequired;
+  })
+  .catch(() => {});
+
+$('logout-btn').addEventListener('click', async () => {
+  await fetch('/api/logout', { method: 'POST' }).catch(() => {});
+  location.reload();
+});
 
 /* ---------------- Toasts ---------------- */
 
@@ -156,7 +204,12 @@ function confirmSheet(message) {
 /* ---------------- Library ---------------- */
 
 async function loadLibrary() {
-  const books = await api('/api/books');
+  let books;
+  try {
+    books = await api('/api/books');
+  } catch {
+    return; // 401 already routed to the login gate
+  }
   bookGrid.innerHTML = '';
   emptyState.hidden = books.length > 0;
 
