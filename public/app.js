@@ -389,6 +389,7 @@ async function generateCover(file, bookId) {
 
 async function openReader(bookId) {
   const token = ++reader.loadToken;
+  closeReaderSheets();
   libraryView.hidden = true;
   readerView.hidden = false;
   readerLoading.hidden = false;
